@@ -8,11 +8,13 @@ import string
 
 from pyparsing import (Group, ZeroOrMore, OneOrMore, Optional, Word, CharsNotIn,
                        Combine, Suppress, restOfLine, LineEnd, ParseException)
+from sympy import latex
 
 from brian2.units.fundamentalunits import DimensionMismatchError
 from brian2.units.allunits import second
 from brian2.utils.stringtools import word_substitute
 from brian2.utils.logger import get_logger
+from brian2.utils.parsing import parse_to_sympy
 
 from .codestrings import Expression
 from .unitcheck import get_unit_from_string, SPECIAL_VARS, UNITS_SPECIAL_VARS
@@ -283,7 +285,13 @@ class SingleEquation(object):
     identifiers = property(lambda self: self.expr.identifiers
                            if not self.expr is None else set([]),
                            doc='All identifiers in the RHS of this equation.')
-        
+
+    def _latex(self, *args):
+        from sympy import Eq, diff, Symbol, latex, Function
+        varname = Function(self.varname)
+        t = Symbol('t')
+        sympy_expr = Eq(diff(varname(t), t), parse_to_sympy(self.expr))
+        return latex(sympy_expr)
 
     def __str__(self):
         if self.eq_type == DIFFERENTIAL_EQUATION:
@@ -731,6 +739,15 @@ class Equations(object):
     
     def __repr__(self):
         return '<Equations object consisting of %d equations>' % len(self._equations)
+
+    def _latex(self, *args):
+        equations = []
+        for eq in self._equations.itervalues():
+            equations.append(latex(eq))
+        return r'\begin{equation}' + r'\\'.join(equations) + r'\end{equation}'
+
+    def _repr_latex_(self):
+        return latex(self)
 
     def _repr_pretty_(self, p, cycle):
         ''' Pretty printing for ipython '''

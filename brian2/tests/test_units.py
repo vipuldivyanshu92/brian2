@@ -16,7 +16,7 @@ from brian2.units.fundamentalunits import (UFUNCS_DIMENSIONLESS,
                                            get_dimensions,
                                            DimensionMismatchError,
                                            check_units,
-                                           display_in_unit,
+                                           in_unit,
                                            get_unit, get_unit_fast,
                                            get_or_create_dimension,
                                            DIMENSIONLESS,
@@ -57,12 +57,34 @@ def test_construction():
     q = Quantity.with_dimensions(np.array([0.5, 1]), second=1)
     assert_quantity(q, np.array([0.5, 1]), second)
 
+    # dimensionless quantities
+    q = Quantity([1, 2, 3])
+    assert_quantity(q, np.array([1, 2, 3]), Unit(1))
+    q = Quantity(np.array([1, 2, 3]))
+    assert_quantity(q, np.array([1, 2, 3]), Unit(1))
+    
+    # copying/referencing a quantity
+    q1 = Quantity.with_dimensions(np.array([0.5, 1]), second=1)
+    q2 = Quantity(q1) # no copy
+    assert_quantity(q2, np.asarray(q1), q1)
+    q2[0] = 3 * second
+    assert_equal(q1[0], 3*second)
+
+    q1 = Quantity.with_dimensions(np.array([0.5, 1]), second=1)
+    q2 = Quantity(q1, copy=True) # copy
+    assert_quantity(q2, np.asarray(q1), q1)
+    q2[0] = 3 * second
+    assert_equal(q1[0], 0.5*second)
+
     # Illegal constructor calls
     assert_raises(TypeError, lambda: Quantity([500 * ms, 1]))
     assert_raises(DimensionMismatchError, lambda: Quantity([500 * ms,
                                                             1 * volt]))
     assert_raises(DimensionMismatchError, lambda: Quantity([500 * ms],
                                                            dim=volt.dim))
+    q = Quantity.with_dimensions(np.array([0.5, 1]), second=1)
+    assert_raises(DimensionMismatchError, lambda: Quantity(q, dim=volt.dim))
+
 
 def test_get_dimensions():
     '''
@@ -79,17 +101,21 @@ def test_get_dimensions():
     assert get_dimensions(5) is DIMENSIONLESS
     assert_raises(TypeError, lambda: get_dimensions('a string'))
     
+    # wrong number of indices
+    assert_raises(ValueError, lambda: get_or_create_dimension([1, 2, 3, 4, 5, 6]))
+    # not a sequence
+    assert_raises(ValueError, lambda: get_or_create_dimension(42))
 
 def test_display():
     '''
     Test displaying a quantity in different units
     '''
-    assert_equal(display_in_unit(3 * volt, mvolt), '3000.0 mV')
-    assert_equal(display_in_unit(10 * mV, ohm * amp), '0.01 ohm A')
-    assert_raises(DimensionMismatchError, lambda: display_in_unit(10 * nS, ohm))
+    assert_equal(in_unit(3 * volt, mvolt), '3000.0 mV')
+    assert_equal(in_unit(10 * mV, ohm * amp), '0.01 ohm A')
+    assert_raises(DimensionMismatchError, lambda: in_unit(10 * nS, ohm))
     
     # A bit artificial...
-    assert_equal(display_in_unit(10.0, Unit(10)), '1.0')
+    assert_equal(in_unit(10.0, Unit(10)), '1.0')
 
 
 def test_pickling():
@@ -139,9 +165,19 @@ def test_str_repr():
     for u in itertools.chain(units_which_should_exist, some_scaled_units,
                               powered_units, complex_units, unitless):
         assert(len(str(u)) > 0)
-        print str(u), repr(u)
         assert_equal(eval(repr(u)), u)
 
+    # test the `DIMENSIONLESS` object
+    assert str(DIMENSIONLESS) == '1'
+    assert repr(DIMENSIONLESS) == 'Dimension()'
+    
+    # test DimensionMismatchError (only that it works without raising an error
+    for error in [DimensionMismatchError('A description'),
+                  DimensionMismatchError('A description', DIMENSIONLESS),
+                  DimensionMismatchError('A description', DIMENSIONLESS,
+                                         second.dim)]:
+        assert len(str(error))
+        assert len(repr(error))
 
 # Slicing and indexing, setting items
 def test_slicing():
@@ -514,7 +550,7 @@ def test_unitsafe_functions():
 
 def test_special_case_numpy_functions():
     '''
-    Test a couple of functions that need special treatment.
+    Test a couple of functions/methods that need special treatment.
     '''
     from brian2.units.unitsafefunctions import ravel, diagonal, trace, dot, where
     
@@ -549,12 +585,19 @@ def test_special_case_numpy_functions():
     assert_equal(np.dot(np.asarray(quadratic_matrix), np.asarray(quadratic_matrix)),
                  dot(np.asarray(quadratic_matrix), np.asarray(quadratic_matrix)))
     
+    assert_equal(np.asarray(quadratic_matrix.prod()),
+                 np.asarray(quadratic_matrix).prod())
+    assert_equal(np.asarray(quadratic_matrix.prod(axis=0)),
+                 np.asarray(quadratic_matrix).prod(axis=0))
+        
     # Check for correct units
     assert have_same_dimensions(quadratic_matrix, ravel(quadratic_matrix))
     assert have_same_dimensions(quadratic_matrix, trace(quadratic_matrix))
     assert have_same_dimensions(quadratic_matrix, diagonal(quadratic_matrix))
     assert have_same_dimensions(quadratic_matrix[0] ** 2,
                                 dot(quadratic_matrix, quadratic_matrix))
+    assert have_same_dimensions(quadratic_matrix.prod(axis=0),
+                                quadratic_matrix[0] ** quadratic_matrix.shape[0])
     
     # check the where function
     # pure numpy array
@@ -585,6 +628,7 @@ def test_numpy_functions_same_dimensions():
     values = [3, np.array([1, 2]), np.ones((3, 3))]
     units = [volt, second, siemens, mV, kHz]
 
+    # numpy functions
     keep_dim_funcs = [np.abs, np.cumsum, np.max, np.mean, np.min, np.negative,
                       np.ptp, np.round, np.squeeze, np.std, np.sum,
                       np.transpose]
@@ -598,6 +642,20 @@ def test_numpy_functions_same_dimensions():
                                       '%s') % (func.__name__, repr(q_ar),
                                                q_ar.dim,
                                                get_dimensions(test_ar)))
+    
+    # Python builtins should work on one-dimensional arrays
+    value = np.arange(5)
+    builtins = [abs, max, min, sum]
+    for unit in units:
+        q_ar = value * unit
+        for func in builtins:
+            test_ar = func(q_ar)
+            if not get_dimensions(test_ar) is q_ar.dim:
+                raise AssertionError(('%s failed on %s -- dim was %s, is now '
+                                      '%s') % (func.__name__, repr(q_ar),
+                                               q_ar.dim,
+                                               get_dimensions(test_ar)))
+
 
 def test_numpy_functions_dimensionless():
     '''
@@ -739,7 +797,7 @@ def test_check_units():
     # Should work (returns second)
     b_function(True)
     # Should fail (returns volt)
-    assert_raises(AssertionError, lambda: b_function(False))
+    assert_raises(DimensionMismatchError, lambda: b_function(False))
 
 
 def test_get_unit():
@@ -763,8 +821,9 @@ def test_switching_off_unit_checks():
     assert_raises(DimensionMismatchError, lambda: x + y)
     fundamentalunits.unit_checking = False
     # Now it should work
-    assert np.asarray(x + y) == np.array(8)
-    
+    assert np.asarray(x + y) == np.array(8)    
+    assert have_same_dimensions(x, y)
+    assert x.has_same_dimensions(y)
     fundamentalunits.unit_checking = True
     
 def test_fail_for_dimension_mismatch():
